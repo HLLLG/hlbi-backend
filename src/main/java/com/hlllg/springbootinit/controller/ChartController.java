@@ -285,7 +285,7 @@ public class ChartController {
         ThrowUtils.throwIf(size > ONE_MB, ErrorCode.PARAMS_ERROR, "文件超过 1M");
         // 校验文件后缀
         String suffix = FileUtil.getSuffix(originalFilename);
-        List<String> validFileSuffixList = Arrays.asList("png", "jpg", "svg", "webp", "jpeg");
+        List<String> validFileSuffixList = Arrays.asList("xls", "xlsx");
         ThrowUtils.throwIf(!validFileSuffixList.contains(suffix), ErrorCode.PARAMS_ERROR, "文件后缀非法");
 
         User loginUser = userService.getLoginUser(request);
@@ -315,7 +315,7 @@ public class ChartController {
         // 压缩后的数据
         String result = ExcelUtils.excelToCsv(multipartFile);
         userInput.append(result).append("\n");
-
+        // 调用AI
         String chat = aiManager.doChat(biModelId, userInput.toString());
         String[] splits = chat.split("【【【【【");
 
