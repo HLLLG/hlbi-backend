@@ -17,6 +17,11 @@ spring:
     host: 8.138.107.109
     port: 6379
     timeout: 5000
+  rabbitmq:
+    host: 8.138.107.109
+    port: 5672
+    username: hlllg
+    password: HGL2020mm
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: false
