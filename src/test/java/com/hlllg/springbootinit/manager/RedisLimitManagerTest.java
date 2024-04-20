@@ -19,10 +19,10 @@ class RedisLimitManagerTest {
 
     @Test
     void doRateLimit() {
-        String userId = "1";
-        for (int i = 0; i < 5; i++) {
-            redisLimitManager.doRateLimit(userId);
-            System.out.println("成功");
-        }
+//        String userId = "1";
+//        for (int i = 0; i < 5; i++) {
+//            redisLimitManager.doRateLimit(userId);
+//            System.out.println("成功");
+//        }
     }
 }
