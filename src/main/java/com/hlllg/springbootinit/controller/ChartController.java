@@ -1,32 +1,23 @@
 package com.hlllg.springbootinit.controller;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Date;
 
-import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.io.FileUtil;
-import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hlllg.springbootinit.annotation.AuthCheck;
+import com.hlllg.springbootinit.bizmq.BiMessageProducer;
 import com.hlllg.springbootinit.common.BaseResponse;
 import com.hlllg.springbootinit.common.DeleteRequest;
 import com.hlllg.springbootinit.common.ErrorCode;
 import com.hlllg.springbootinit.common.ResultUtils;
 import com.hlllg.springbootinit.constant.CommonConstant;
-import com.hlllg.springbootinit.constant.FileConstant;
 import com.hlllg.springbootinit.constant.UserConstant;
 import com.hlllg.springbootinit.exception.BusinessException;
 import com.hlllg.springbootinit.exception.ThrowUtils;
 import com.hlllg.springbootinit.manager.AiManager;
 import com.hlllg.springbootinit.manager.RedisLimitManager;
 import com.hlllg.springbootinit.model.dto.chart.*;
-import com.hlllg.springbootinit.model.dto.file.UploadFileRequest;
-import com.hlllg.springbootinit.model.dto.post.PostQueryRequest;
 import com.hlllg.springbootinit.model.entity.Chart;
-import com.hlllg.springbootinit.model.entity.Post;
 import com.hlllg.springbootinit.model.entity.User;
-import com.hlllg.springbootinit.model.enums.FileUploadBizEnum;
 import com.hlllg.springbootinit.model.vo.BiResponse;
 import com.hlllg.springbootinit.service.ChartService;
 import com.hlllg.springbootinit.service.UserService;
@@ -34,17 +25,17 @@ import com.hlllg.springbootinit.utils.ExcelUtils;
 import com.hlllg.springbootinit.utils.SqlUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ObjectUtils;
-import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.tomcat.jni.Error;
 import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
-import java.io.File;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 图形接口
@@ -66,6 +57,12 @@ public class ChartController {
 
     @Resource
     private RedisLimitManager redisLimitManager;
+
+    @Resource
+    private ThreadPoolExecutor threadPoolExecutor;
+
+    @Resource
+    private BiMessageProducer biMessageProducer;
 
     // region 增删改查
 
@@ -260,8 +257,8 @@ public class ChartController {
     }
 
     /**
-     * 文件上传
-     *
+     * 调用 AI（同步）
+     * 智能分析
      * @param multipartFile
      * @param genChartByAiRequest
      * @param request
@@ -269,7 +266,7 @@ public class ChartController {
      */
     @PostMapping("/gen")
     public BaseResponse<BiResponse> genChartByAi(@RequestPart("file") MultipartFile multipartFile,
-                                             GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+                                                 GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
         String goal = genChartByAiRequest.getGoal();
         String name = genChartByAiRequest.getName();
         String chartType = genChartByAiRequest.getChartType();
@@ -342,6 +339,199 @@ public class ChartController {
         biResponse.setGenResult(genResult);
         biResponse.setChartId(chart.getId());
         return ResultUtils.success(biResponse);
+    }
+
+    /**
+     * 调用 AI（异步）
+     *
+     * @param multipartFile
+     * @param genChartByAiRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/gen/async")
+    public BaseResponse<BiResponse> genChartByAiAsync(@RequestPart("file") MultipartFile multipartFile,
+                                             GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+        String goal = genChartByAiRequest.getGoal();
+        String name = genChartByAiRequest.getName();
+        String chartType = genChartByAiRequest.getChartType();
+
+        // 校验
+        ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "分析目标为空");
+        ThrowUtils.throwIf(StringUtils.isNotBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, "图标名称过长");
+        // 文件校验
+        long size = multipartFile.getSize();
+        String originalFilename = multipartFile.getOriginalFilename();
+        // 校验文件大小
+        final long ONE_MB = 1024 * 1024L;
+        ThrowUtils.throwIf(size > ONE_MB, ErrorCode.PARAMS_ERROR, "文件超过 1M");
+        // 校验文件后缀
+        String suffix = FileUtil.getSuffix(originalFilename);
+        List<String> validFileSuffixList = Arrays.asList("xls", "xlsx");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(suffix), ErrorCode.PARAMS_ERROR, "文件后缀非法");
+
+        User loginUser = userService.getLoginUser(request);
+        // 限流判断，每个用户一个限流器
+        redisLimitManager.doRateLimit(String.valueOf("genChartByAi_" + loginUser.getId()));
+
+        long biModelId = 1659171950288818178L;
+        // 分析需求：
+        // 分析网站用户的增长情况
+        // 原始数据：
+        // 日期,用户数
+        // 1号,10
+        // 2号,20
+        // 3号,30
+
+        // 构造用户输入
+        StringBuilder userInput = new StringBuilder();
+        userInput.append("分析需求：").append("\n");
+
+        // 拼接分析目标
+        String userGoal = goal;
+        if (StringUtils.isNotBlank(userGoal)) {
+            userGoal += ", 请使用" + chartType;
+        }
+        userInput.append(userGoal).append("\n");
+        userInput.append("原始数据：").append("\n");
+        // 压缩后的数据
+        String result = ExcelUtils.excelToCsv(multipartFile);
+        userInput.append(result).append("\n");
+
+        // 插入到数据库中
+        Chart chart = new Chart();
+        chart.setGoal(goal);
+        chart.setName(name);
+        chart.setChartData(result);
+        chart.setChartType(chartType);
+        chart.setStatus("wait");
+        chart.setUserId(loginUser.getId());
+        boolean saveResult = chartService.save(chart);
+        ThrowUtils.throwIf(!saveResult, ErrorCode.PARAMS_ERROR, "图标数据保存失败");
+
+        // todo 建议处理任务队列满了后，抛异常的情况
+        CompletableFuture.runAsync(() -> {
+            // 先修改图表状态为“执行中”， 等执行成功后修改为“已完成”并保存执行结果，如果执行失败则将状态改为“失败”
+            Chart updateChart = new Chart();
+            updateChart.setId(chart.getId());
+            updateChart.setStatus("running");
+            boolean b = chartService.updateById(updateChart);
+            if (!b) {
+                handleChartUpdateError(chart.getId(), "更新图表执行中状态失败");
+            }
+
+            // 调用AI
+            String chat = aiManager.doChat(biModelId, userInput.toString());
+            String[] splits = chat.split("【【【【【");
+            if (splits.length < 3) {
+                handleChartUpdateError(chart.getId(), "AI 生成错误");
+            }
+            String genChart = splits[1].trim();
+            String genResult = splits[2].trim();
+
+            Chart updateChartResult = new Chart();
+            updateChartResult.setId(chart.getId());
+            updateChartResult.setGenChart(genChart);
+            updateChartResult.setGenResult(genResult);
+            // todo 建议定义状态枚举值
+            updateChartResult.setStatus("succeed");
+            boolean updateResult = chartService.updateById(updateChartResult);
+            if (!updateResult) {
+                handleChartUpdateError(chart.getId(), "更新图表成功状态失败");
+            }
+        }, threadPoolExecutor);
+
+        BiResponse biResponse = new BiResponse();
+        biResponse.setChartId(chart.getId());
+        return ResultUtils.success(biResponse);
+    }
+
+    /**
+     * 调用 AI（异步消息队列）
+     *
+     * @param multipartFile
+     * @param genChartByAiRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/gen/async/mq")
+    public BaseResponse<BiResponse> genChartByAiAsyncMq(@RequestPart("file") MultipartFile multipartFile,
+                                                      GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+        String goal = genChartByAiRequest.getGoal();
+        String name = genChartByAiRequest.getName();
+        String chartType = genChartByAiRequest.getChartType();
+
+        // 校验
+        ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "分析目标为空");
+        ThrowUtils.throwIf(StringUtils.isNotBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, "图标名称过长");
+        // 文件校验
+        long size = multipartFile.getSize();
+        String originalFilename = multipartFile.getOriginalFilename();
+        // 校验文件大小
+        final long ONE_MB = 1024 * 1024L;
+        ThrowUtils.throwIf(size > ONE_MB, ErrorCode.PARAMS_ERROR, "文件超过 1M");
+        // 校验文件后缀
+        String suffix = FileUtil.getSuffix(originalFilename);
+        List<String> validFileSuffixList = Arrays.asList("xls", "xlsx");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(suffix), ErrorCode.PARAMS_ERROR, "文件后缀非法");
+
+        User loginUser = userService.getLoginUser(request);
+        // 限流判断，每个用户一个限流器
+        redisLimitManager.doRateLimit(String.valueOf("genChartByAi_" + loginUser.getId()));
+
+        long biModelId = CommonConstant.BI_MODEL_ID;
+        // 分析需求：
+        // 分析网站用户的增长情况
+        // 原始数据：
+        // 日期,用户数
+        // 1号,10
+        // 2号,20
+        // 3号,30
+
+        // 构造用户输入
+        StringBuilder userInput = new StringBuilder();
+        userInput.append("分析需求：").append("\n");
+
+        // 拼接分析目标
+        String userGoal = goal;
+        if (StringUtils.isNotBlank(userGoal)) {
+            userGoal += ", 请使用" + chartType;
+        }
+        userInput.append(userGoal).append("\n");
+        userInput.append("原始数据：").append("\n");
+        // 压缩后的数据
+        String result = ExcelUtils.excelToCsv(multipartFile);
+        userInput.append(result).append("\n");
+
+        // 插入到数据库中
+        Chart chart = new Chart();
+        chart.setGoal(goal);
+        chart.setName(name);
+        chart.setChartData(result);
+        chart.setChartType(chartType);
+        chart.setStatus("wait");
+        chart.setUserId(loginUser.getId());
+        boolean saveResult = chartService.save(chart);
+        ThrowUtils.throwIf(!saveResult, ErrorCode.PARAMS_ERROR, "图标数据保存失败");
+        Long newChartId = chart.getId();
+
+        // 发送到消息队列中
+        biMessageProducer.sendMessage(String.valueOf(newChartId));
+
+        BiResponse biResponse = new BiResponse();
+        biResponse.setChartId(newChartId);
+        return ResultUtils.success(biResponse);
+    }
+
+    private void handleChartUpdateError(Long chartId, String execMessage) {
+        Chart updateChartResult = new Chart();
+        updateChartResult.setId(chartId);
+        updateChartResult.setStatus("failed");
+        updateChartResult.setExecMessage(execMessage);
+        boolean updateResult = chartService.updateById(updateChartResult);
+        if (!updateResult) {
+            log.error("图标状态更改失败" + chartId + ", " + execMessage);
+        }
     }
 
 

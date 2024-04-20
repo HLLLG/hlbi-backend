@@ -1,36 +1,53 @@
 # 线上配置文件
-
-server:
-  port: 8101
 spring:
   # 数据库配置
   # todo 需替换配置
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/my_db
-    username: root
-    password: 123456
+    url: jdbc:mysql://rm-bp14kjh9te20c7in93o.mysql.rds.aliyuncs.com/hlbi?useSSL=false
+    username: hlllg
+    password: HGL2020mm
+  session:
+    timeout: 86400
+    store-type: redis
   # Redis 配置
   # todo 需替换配置
   redis:
-    database: 1
-    host: localhost
+    database: 2
+    host: 8.138.107.109
     port: 6379
     timeout: 5000
-    password: 123456
-  # Elasticsearch 配置
-  # todo 需替换配置
-  elasticsearch:
-    uris: http://localhost:9200
-    username: root
-    password: 123456
 mybatis-plus:
   configuration:
+    map-underscore-to-camel-case: false
     # 生产环境关闭日志
-    log-impl: ''
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      logic-delete-field: isDelete # 全局逻辑删除的实体字段名
+      logic-delete-value: 1 # 逻辑已删除值（默认为 1）
+      logic-not-delete-value: 0 # 逻辑未删除值（默认为 0）
 # 接口文档配置
 knife4j:
-  basic:
-    enable: true
-    username: root
-    password: 123456
+  enable: true
+  openapi:
+    title: "接口文档"
+    version: 1.0
+    group:
+      default:
+        api-rule: package
+        api-rule-resources:
+          - com.hlllg.springbootinit.controller
+# 鱼聪明AI 配置
+yuapi:
+  client:
+    access-key: l99kgzy82u54guowqfscahsytwwbjiwe
+    secret-key: ufksqyoucjx8bhafn5ofgh3eorfw4ao5
+server:
+  address: 0.0.0.0
+  servlet:
+    session:
+      cookie:
+        domain: hlllg.cn
+        same-site: lax
+        secure: false

@@ -33,7 +33,6 @@ public class AiManager {
         if (response == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "AI 响应错误");
         }
-        System.out.println(response.getData());
         return response.getData().getContent();
     }
 }
